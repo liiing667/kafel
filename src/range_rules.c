@@ -25,6 +25,7 @@
 
 #include "common.h"
 #include "syscall.h"
+#include "validate.h"
 
 static void range_rule_deinit(struct syscall_range_rule *rule) {
   ASSERT(rule != NULL);
@@ -125,6 +126,7 @@ static void add_range_rule(struct syscall_range_rules *rules,
                            struct syscall_range_rule *rule) {
   ASSERT(rules != NULL);
   ASSERT(rule != NULL);
+  ASSERT(kafel_validate_range(rule->first, rule->last) == KAFEL_NUMERIC_OK);
 
   grow_range_rules(rules, 1);
   struct syscall_range_rule *added = &rules->data[rules->len++];
@@ -241,6 +243,30 @@ static void sort_range_rules(struct syscall_range_rules *rules) {
   fix_tailq_moving(rules);
 }
 
+/*
+ * Overlap resolution (KAFEL_NUMERIC_OVERLAP class): rules are sorted by
+ * (first, priority), so two rules share an endpoint only when the same
+ * syscall number is filtered more than once -- either by repeated filters
+ * or by distinct architectures assigning it the same number. The
+ * higher-priority rule wins; a conditional rule absorbs later entries as
+ * additional expression-to-action mappings until a catch-all is reached.
+ */
+static void merge_overlapping_rule(struct syscall_range_rule *prev,
+                                   struct syscall_range_rule *cur) {
+  ASSERT(prev != NULL);
+  ASSERT(cur != NULL);
+  ASSERT(prev->first == cur->first);
+
+  if (prev->action == ACTION_CONDITIONAL && !rule_has_catch_all_expr(prev)) {
+    if (cur->action == ACTION_CONDITIONAL) {
+      TAILQ_CONCAT(&prev->expr_list, &cur->expr_list, list);
+    } else {
+      rule_add_expr(prev, NULL, cur->action);
+    }
+  }
+  range_rule_deinit(cur);
+}
+
 static size_t normalize_rules_count_missing(struct syscall_range_rules *rules,
                                             int default_action) {
   ASSERT(rules != NULL);
@@ -257,23 +283,17 @@ static size_t normalize_rules_count_missing(struct syscall_range_rules *rules,
     ASSERT(cur->first == cur->last);
     ASSERT(prev->action != ACTION_CONDITIONAL || prev->first == prev->last);
     if (cur->first == prev->last) {
-      if (prev->action == ACTION_CONDITIONAL &&
-          !rule_has_catch_all_expr(prev)) {
-        if (cur->action == ACTION_CONDITIONAL) {
-          TAILQ_CONCAT(&prev->expr_list, &cur->expr_list, list);
-        } else {
-          rule_add_expr(prev, NULL, cur->action);
-        }
-      }
-      range_rule_deinit(cur);
+      merge_overlapping_rule(prev, cur);
       continue;
-    } else if (cur->first == prev->last + 1) {
+    } else if (kafel_range_endpoints_adjacent(prev->last, cur->first)) {
       if (prev->action != ACTION_CONDITIONAL && prev->action == cur->action) {
         prev->last = cur->last;
         range_rule_deinit(cur);
         continue;
       }
     } else {
+      /* Gap: prev->last < cur->first - 1, so neither endpoint can wrap. */
+      ASSERT(prev->last < MAX_SYSCALL_NR && cur->first > prev->last + 1);
       if (prev->action == default_action) {
         prev->last = cur->first - 1;
       } else if (cur->action == default_action) {
@@ -343,7 +363,7 @@ static void add_missing_rules(struct syscall_range_rules *rules, size_t to_add,
     if (cur->action == ACTION_CONDITIONAL) {
       rule_add_expr(cur, NULL, default_action);
     }
-    if (prev != NULL && prev->first != cur->last + 1) {
+    if (prev != NULL && !kafel_range_endpoints_adjacent(cur->last, prev->first)) {
       ASSERT(to_add > 0);
       dst->first = cur->last + 1;
       dst->last = prev->first - 1;

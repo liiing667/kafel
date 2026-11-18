@@ -259,3 +259,55 @@ TEST_CASE(logic_negation) {
                              SYSCALL_ERRNO_SPEC(1));
   TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC3(__NR_read, 5, 0, 0));
 }
+
+TEST_CASE(numeric_boundaries) {
+  // The top of the uint32 syscall domain is a valid endpoint.
+  TEST_POLICY(
+      "POLICY a {\n"
+      "  ALLOW { exit },\n"
+      "  ERRNO(1) { SYSCALL[4294967295] }\n"
+      "} USE a DEFAULT KILL");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC0(-1), SYSCALL_ERRNO_SPEC(1));
+  TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC0(4));
+  // Negative shorthand and zero bound the range from both ends without
+  // wraparound during normalization.
+  TEST_POLICY(
+      "ERRNO(1) { SYSCALL[-1] },\n"
+      "ERRNO(2) { SYSCALL[0] },\n"
+      "ALLOW { exit }");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC0(-1), SYSCALL_ERRNO_SPEC(1));
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC0(0), SYSCALL_ERRNO_SPEC(2));
+  TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC0(4));
+  // Values outside the uint32 syscall domain are rejected, not truncated.
+  TEST_COMPILE_ERROR("ALLOW { SYSCALL[4294967296] }");
+  TEST_COMPILE_ERROR("ALLOW { SYSCALL[18446744069414584319] }");
+  TEST_COMPILE_ERROR(
+      "#define SYS_WRAP 4294967296\n"
+      "ALLOW { SYS_WRAP }");
+  TEST_COMPILE_ERROR(
+      "#define SYS_NEG_WRAP -4294967297\n"
+      "ALLOW { SYS_NEG_WRAP }");
+  // Action payloads are limited to 16 bits.
+  TEST_POLICY("ERRNO(65535) { read }, ALLOW { exit }");
+  TEST_POLICY("TRAP(65535) { read }, ALLOW { exit }");
+  TEST_COMPILE_ERROR("ERRNO(65536) { read }");
+  TEST_COMPILE_ERROR("TRAP(65536) { read }");
+  TEST_COMPILE_ERROR("TRACE(65536) { read }");
+  // Overlapping endpoints resolve by priority: the first rule wins.
+  TEST_POLICY("ALLOW { exit, read }, KILL { read }");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 0, 0, 0),
+                             SYSCALL_EXECUTED_SPEC(0, 0));
+  // Same-action duplicates (as produced by multi-arch rules) merge cleanly.
+  TEST_POLICY("ALLOW { exit, read, read }");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 0, 0, 0),
+                             SYSCALL_EXECUTED_SPEC(0, 0));
+  TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC0(4));
+  // Multi-arch rules still compile and enforce normally.
+  TEST_POLICY(
+      "DEFAULT KILL\n"
+      "ALLOW { exit, read ON { x86_64, x86 } }\n");
+#if defined(__x86_64__)
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 0, 0, 0),
+                             SYSCALL_EXECUTED_SPEC(0, 0));
+#endif
+}

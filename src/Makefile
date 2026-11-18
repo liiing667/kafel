@@ -41,6 +41,7 @@ SRCS:=kafel.c \
       policy.c \
       range_rules.c \
       syscall.c \
+      validate.c \
       ${GENERATED_SRCS} \
       $(SYSCALL_LISTS:%.c=syscalls/%.c)
 DYNAMIC_TARGET:=${PROJECT_ROOT}libkafel.so
@@ -79,18 +80,19 @@ kafel.o: syscall.h common.h lexer.h parser.h
 context.o: context.h includes.h parser_types.h policy.h expression.h
 context.o: syscall.h common.h
 codegen.o: codegen.h context.h includes.h parser_types.h policy.h
-codegen.o: expression.h syscall.h common.h range_rules.h
+codegen.o: expression.h syscall.h common.h range_rules.h validate.h
 expression.o: expression.h parser_types.h syscall.h common.h
 includes.o: includes.h common.h
 parser_types.o: parser_types.h common.h
 policy.o: policy.h expression.h parser_types.h syscall.h common.h
 range_rules.o: range_rules.h policy.h expression.h parser_types.h syscall.h
-range_rules.o: common.h
+range_rules.o: common.h validate.h
 syscall.o: syscall.h common.h
+validate.o: validate.h policy.h expression.h parser_types.h syscall.h common.h
 lexer.o: parser.h context.h includes.h parser_types.h policy.h expression.h
 lexer.o: syscall.h common.h
 parser.o: common.h parser.h context.h includes.h parser_types.h policy.h
-parser.o: expression.h syscall.h lexer.h
+parser.o: expression.h syscall.h lexer.h validate.h
 syscalls/amd64_syscalls.o: syscall.h
 syscalls/i386_syscalls.o: syscall.h
 syscalls/aarch64_syscalls.o: syscall.h

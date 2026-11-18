@@ -31,6 +31,7 @@
 #include "common.h"
 #include "parser.h"
 #include "lexer.h"
+#include "validate.h"
 
 void yyerror(YYLTYPE * loc, struct kafel_ctxt* ctxt, yyscan_t scanner,
              const char *msg);
@@ -266,27 +267,33 @@ action
     | USER_NOTIF { $$ = ACTION_USER_NOTIF; }
     | ERRNO '(' NUMBER ')'
         {
-          if ($3 > 0xffff) {
-            emit_error(@3, "Errno value %"PRIu64" out of range (0-65535)", $3);
+          uint32_t data = 0;
+          if (kafel_validate_action_data($3, &data) != KAFEL_NUMERIC_OK) {
+            emit_error(@3, "Errno value %"PRIu64" out of range (0-%u)", $3,
+                       KAFEL_ACTION_DATA_MAX);
             YYERROR;
           }
-          $$ = ACTION_ERRNO | ($3 & 0xffff);
+          $$ = ACTION_ERRNO | data;
         }
     | TRACE '(' NUMBER ')'
         {
-          if ($3 > 0xffff) {
-            emit_error(@3, "Trace value %"PRIu64" out of range (0-65535)", $3);
+          uint32_t data = 0;
+          if (kafel_validate_action_data($3, &data) != KAFEL_NUMERIC_OK) {
+            emit_error(@3, "Trace value %"PRIu64" out of range (0-%u)", $3,
+                       KAFEL_ACTION_DATA_MAX);
             YYERROR;
           }
-          $$ = ACTION_TRACE | ($3 & 0xffff);
+          $$ = ACTION_TRACE | data;
         }
     | TRAP '(' NUMBER ')'
         {
-          if ($3 > 0xffff) {
-            emit_error(@3, "Trap value %"PRIu64" out of range (0-65535)", $3);
+          uint32_t data = 0;
+          if (kafel_validate_action_data($3, &data) != KAFEL_NUMERIC_OK) {
+            emit_error(@3, "Trap value %"PRIu64" out of range (0-%u)", $3,
+                       KAFEL_ACTION_DATA_MAX);
             YYERROR;
           }
-          $$ = ACTION_TRAP | ($3 & 0xffff);
+          $$ = ACTION_TRAP | data;
         }
     ;
 
@@ -362,7 +369,16 @@ syscall_id
         {
             uint64_t value = 0;
             if (lookup_const(ctxt, $1, &value) == 0) {
-                $$ = syscall_spec_create_custom(value);
+                uint32_t nr = 0;
+                enum kafel_numeric_error err =
+                    kafel_validate_syscall_nr(value, &nr);
+                if (err != KAFEL_NUMERIC_OK) {
+                    emit_error(@1, "Invalid syscall number `%s' (%"PRIu64"): %s",
+                               $1, value, kafel_numeric_error_desc(err));
+                    free($1); $1 = NULL;
+                    YYERROR;
+                }
+                $$ = syscall_spec_create_custom(nr);
             } else {
                 $$ = syscall_spec_create_identifier(kafel_identifier_create($1, &@1));
             }
@@ -370,7 +386,14 @@ syscall_id
         }
     | SYSCALL '[' NUMBER ']'
         {
-            $$ = syscall_spec_create_custom($3);
+            uint32_t nr = 0;
+            enum kafel_numeric_error err = kafel_validate_syscall_nr($3, &nr);
+            if (err != KAFEL_NUMERIC_OK) {
+                emit_error(@3, "Invalid syscall number %"PRIu64": %s", $3,
+                           kafel_numeric_error_desc(err));
+                YYERROR;
+            }
+            $$ = syscall_spec_create_custom(nr);
         }
     ;
 

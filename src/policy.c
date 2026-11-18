@@ -124,7 +124,7 @@ struct syscall_spec* syscall_spec_create_identifier(
   return rv;
 }
 
-struct syscall_spec* syscall_spec_create_custom(int syscall_nr) {
+struct syscall_spec* syscall_spec_create_custom(uint32_t syscall_nr) {
   struct syscall_spec* rv = calloc(1, sizeof(*rv));
   rv->type = SYSCALL_SPEC_CUSTOM;
   rv->syscall_nr = syscall_nr;
@@ -140,8 +140,8 @@ void syscall_spec_set_custom_args(struct syscall_spec* spec,
   memcpy(spec->custom_args, custom_args, sizeof(spec->custom_args));
 }
 
-int syscall_spec_get_syscall_nr(const struct syscall_spec* spec,
-                                const struct syscall_list* syscall_list) {
+uint32_t syscall_spec_get_syscall_nr(const struct syscall_spec* spec,
+                                     const struct syscall_list* syscall_list) {
   switch (spec->type) {
     case SYSCALL_SPEC_ID: {
       const struct syscall_descriptor* desc =

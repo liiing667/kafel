@@ -32,6 +32,7 @@
 #include "kafel.h"
 #include "range_rules.h"
 #include "syscall.h"
+#include "validate.h"
 
 #define INVALID_LOCATION INT_MIN
 #define MAX_JUMP UINT8_MAX
@@ -72,6 +73,7 @@
   add_jump(ctxt, (type) | BPF_X, 0, (tloc), (floc))
 
 static __u32 ACTION_TO_BPF(int action) {
+  ASSERT(kafel_action_valid(action));
   switch (action) {
     case ACTION_KILL:
       return SECCOMP_RET_KILL;
@@ -84,8 +86,8 @@ static __u32 ACTION_TO_BPF(int action) {
     case ACTION_USER_NOTIF:
       return SECCOMP_RET_USER_NOTIF;
   }
-  int masked_action = action & 0xfff0000;
-  int value = action & 0xffff;
+  uint32_t masked_action = (uint32_t)action & ~KAFEL_ACTION_DATA_MAX;
+  uint32_t value = (uint32_t)action & KAFEL_ACTION_DATA_MAX;
   switch (masked_action) {
     case ACTION_TRAP:
       return SECCOMP_RET_TRAP | value;
