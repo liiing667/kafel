@@ -203,11 +203,15 @@ void syscall_spec_destroy(struct syscall_spec** spec) {
 
 struct syscall_filter* syscall_filter_create(struct syscall_spec* syscall,
                                              struct expr_tree* expr,
-                                             uint32_t arch_mask) {
+                                             uint32_t arch_mask,
+                                             const struct kafel_source_location* loc) {
   struct syscall_filter* rv = calloc(1, sizeof(*rv));
   rv->syscall = syscall;
   rv->expr = expr;
   rv->arch_mask = arch_mask ? arch_mask : KAFEL_TARGET_ARCHS_ALL;
+  if (loc != NULL) {
+    rv->loc = *loc;
+  }
   return rv;
 }
 

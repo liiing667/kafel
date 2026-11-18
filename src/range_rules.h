@@ -29,6 +29,8 @@
 #include "policy.h"
 #include "syscall.h"
 
+struct kafel_ctxt;
+
 #ifndef INITAL_RANGE_RULES_SIZE
 #define INITAL_RANGE_RULES_SIZE 16
 #endif
@@ -46,6 +48,7 @@ struct syscall_range_rule {
   uint32_t last;
   int action;
   int priority;
+  struct kafel_source_location loc;
   TAILQ_HEAD(expression_to_action_list, expression_to_action) expr_list;
 };
 
@@ -59,6 +62,8 @@ struct syscall_range_rules *range_rules_create(void);
 void range_rules_destroy(struct syscall_range_rules **rules);
 void add_policy_rules(struct syscall_range_rules *rules, struct policy *policy,
                       const struct syscall_list *syscall_list);
-void normalize_rules(struct syscall_range_rules *rules, int default_action);
+int normalize_rules(struct syscall_range_rules *rules, int default_action,
+                    struct kafel_ctxt *kafel_ctxt,
+                    const struct syscall_list *syscall_list);
 
 #endif /* KAFEL_RANGE_RULE_H */

@@ -20,11 +20,63 @@
 
 #include "range_rules.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "context.h"
 #include "common.h"
 #include "syscall.h"
+
+static const char *action_to_string(int action) {
+  switch (action) {
+    case ACTION_KILL:
+      return "KILL";
+    case ACTION_KILL_PROCESS:
+      return "KILL_PROCESS";
+    case ACTION_ALLOW:
+      return "ALLOW";
+    case ACTION_LOG:
+      return "LOG";
+    case ACTION_USER_NOTIF:
+      return "USER_NOTIF";
+  }
+  switch (action & 0xfff0000) {
+    case ACTION_TRAP:
+      return "TRAP";
+    case ACTION_ERRNO:
+      return "ERRNO";
+    case ACTION_TRACE:
+      return "TRACE";
+  }
+  return "UNKNOWN";
+}
+
+static void emit_rule_error(struct kafel_ctxt *kafel_ctxt,
+                            const struct syscall_range_rule *rule,
+                            const char *fmt, ...) {
+  ASSERT(kafel_ctxt != NULL);
+  ASSERT(rule != NULL);
+
+  char msg[256];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end(ap);
+
+  if (rule->loc.first_line > 0) {
+    if (rule->loc.filename != NULL) {
+      append_error(kafel_ctxt, "%s:%d:%d: %s", rule->loc.filename,
+                   rule->loc.first_line, rule->loc.first_column, msg);
+    } else {
+      append_error(kafel_ctxt, "%d:%d: %s", rule->loc.first_line,
+                   rule->loc.first_column, msg);
+    }
+  } else {
+    append_error(kafel_ctxt, "%s", msg);
+  }
+}
 
 static void range_rule_deinit(struct syscall_range_rule *rule) {
   ASSERT(rule != NULL);
@@ -150,6 +202,7 @@ static void add_filters(struct syscall_range_rules *rules,
     struct syscall_range_rule rule = {
         .first = syscall_nr,
         .last = syscall_nr,
+        .loc = filter->loc,
     };
     TAILQ_INIT(&rule.expr_list);
     struct expr_tree *expr = NULL;
@@ -241,15 +294,117 @@ static void sort_range_rules(struct syscall_range_rules *rules) {
   fix_tailq_moving(rules);
 }
 
-static size_t normalize_rules_count_missing(struct syscall_range_rules *rules,
-                                            int default_action) {
+/*
+ * Merge a later rule (cur) describing the same syscall number into the
+ * earlier rule (prev).  Returns 0 on success, -1 when the later rule carries
+ * a decision that can never take effect and compilation must fail closed.
+ */
+static int merge_duplicate_rule(struct syscall_range_rule *prev,
+                                struct syscall_range_rule *cur,
+                                struct kafel_ctxt *kafel_ctxt,
+                                const struct syscall_list *syscall_list) {
+  ASSERT(cur->first == cur->last);
+  ASSERT(cur->first >= prev->first && cur->first <= prev->last);
+
+  /*
+   * cur falls inside an already expanded interval of prev.  An unconditional
+   * interval decides every syscall it covers, so cur can never take effect.
+   */
+  if (prev->first != cur->first) {
+    int cur_action = cur->action;
+    if (cur_action == ACTION_CONDITIONAL) {
+      cur_action =
+          TAILQ_LAST(&cur->expr_list, expression_to_action_list)->action;
+    }
+    if (cur_action != prev->action) {
+      emit_rule_error(kafel_ctxt, cur,
+                      "Conflicting policy for syscall %u on %s: %s rule is "
+                      "unreachable because an earlier %s rule always matches",
+                      cur->first,
+                      kafel_arch_to_string(syscall_list->kafel_arch),
+                      action_to_string(cur_action),
+                      action_to_string(prev->action));
+      return -1;
+    }
+    range_rule_deinit(cur);
+    return 0;
+  }
+
+  if (prev->action == ACTION_CONDITIONAL) {
+    if (rule_has_catch_all_expr(prev)) {
+      /*
+       * Every invocation of this syscall is already decided by prev.
+       * An identical decision is a redundant rule and is dropped; any other
+       * decision is unreachable and therefore a conflict.
+       */
+      int prev_action =
+          TAILQ_LAST(&prev->expr_list, expression_to_action_list)->action;
+      int cur_action = cur->action;
+      if (cur_action == ACTION_CONDITIONAL) {
+        cur_action =
+            TAILQ_LAST(&cur->expr_list, expression_to_action_list)->action;
+      }
+      if (cur_action != prev_action) {
+        emit_rule_error(kafel_ctxt, cur,
+                        "Conflicting policy for syscall %u on %s: "
+                        "rule is shadowed by an earlier %s rule",
+                        cur->first,
+                        kafel_arch_to_string(syscall_list->kafel_arch),
+                        action_to_string(prev_action));
+        return -1;
+      }
+      range_rule_deinit(cur);
+      return 0;
+    }
+    /* prev has no catch-all: extend the ordered conditional chain. */
+    if (cur->action == ACTION_CONDITIONAL) {
+      TAILQ_CONCAT(&prev->expr_list, &cur->expr_list, list);
+    } else {
+      rule_add_expr(prev, NULL, cur->action);
+    }
+    range_rule_deinit(cur);
+    return 0;
+  }
+
+  /* prev is unconditional and always wins. */
+  if (cur->action != prev->action) {
+    int cur_action = cur->action;
+    if (cur_action == ACTION_CONDITIONAL) {
+      cur_action =
+          TAILQ_LAST(&cur->expr_list, expression_to_action_list)->action;
+    }
+    if (cur_action == prev->action) {
+      /*
+       * Every decision the conditional chain can make equals the earlier
+       * unconditional decision: the whole rule is redundant, not a conflict.
+       */
+      range_rule_deinit(cur);
+      return 0;
+    }
+    emit_rule_error(kafel_ctxt, cur,
+                    "Conflicting policy for syscall %u on %s: %s rule is "
+                    "unreachable because an earlier %s rule always matches",
+                    cur->first,
+                    kafel_arch_to_string(syscall_list->kafel_arch),
+                    action_to_string(cur_action),
+                    action_to_string(prev->action));
+    return -1;
+  }
+  range_rule_deinit(cur);
+  return 0;
+}
+
+static int normalize_rules_count_missing(struct syscall_range_rules *rules,
+                                         int default_action,
+                                         struct kafel_ctxt *kafel_ctxt,
+                                         const struct syscall_list *syscall_list) {
   ASSERT(rules != NULL);
 
   size_t len = rules->len;
 
   ASSERT(len > 0);
 
-  size_t to_add = 0;
+  int to_add = 0;
   size_t j = 1;
   for (size_t i = 1; i < len; ++i) {
     struct syscall_range_rule *cur = &rules->data[i];
@@ -257,15 +412,9 @@ static size_t normalize_rules_count_missing(struct syscall_range_rules *rules,
     ASSERT(cur->first == cur->last);
     ASSERT(prev->action != ACTION_CONDITIONAL || prev->first == prev->last);
     if (cur->first == prev->last) {
-      if (prev->action == ACTION_CONDITIONAL &&
-          !rule_has_catch_all_expr(prev)) {
-        if (cur->action == ACTION_CONDITIONAL) {
-          TAILQ_CONCAT(&prev->expr_list, &cur->expr_list, list);
-        } else {
-          rule_add_expr(prev, NULL, cur->action);
-        }
+      if (merge_duplicate_rule(prev, cur, kafel_ctxt, syscall_list)) {
+        return -1;
       }
-      range_rule_deinit(cur);
       continue;
     } else if (cur->first == prev->last + 1) {
       if (prev->action != ACTION_CONDITIONAL && prev->action == cur->action) {
@@ -319,10 +468,10 @@ static size_t normalize_rules_count_missing(struct syscall_range_rules *rules,
   return to_add;
 }
 
-static void add_missing_rules(struct syscall_range_rules *rules, size_t to_add,
+static void add_missing_rules(struct syscall_range_rules *rules, int to_add,
                               int default_action) {
   size_t oldlen = rules->len;
-  grow_range_rules(rules, to_add);
+  grow_range_rules(rules, (size_t)to_add);
   rules->len = oldlen + to_add;
 
   struct syscall_range_rule *last_rule = &rules->data[oldlen - 1];
@@ -373,7 +522,9 @@ static void add_missing_rules(struct syscall_range_rules *rules, size_t to_add,
   ASSERT(to_add == 0);
 }
 
-void normalize_rules(struct syscall_range_rules *rules, int default_action) {
+int normalize_rules(struct syscall_range_rules *rules, int default_action,
+                    struct kafel_ctxt *kafel_ctxt,
+                    const struct syscall_list *syscall_list) {
   ASSERT(rules != NULL);
   ASSERT(default_action != ACTION_CONDITIONAL);
 
@@ -381,10 +532,15 @@ void normalize_rules(struct syscall_range_rules *rules, int default_action) {
     struct syscall_range_rule rule = {
         .first = 0, .last = MAX_SYSCALL_NR, .action = default_action};
     add_range_rule(rules, &rule);
-    return;
+    return 0;
   }
 
   sort_range_rules(rules);
-  size_t to_add = normalize_rules_count_missing(rules, default_action);
+  int to_add = normalize_rules_count_missing(rules, default_action, kafel_ctxt,
+                                             syscall_list);
+  if (to_add < 0) {
+    return -1;
+  }
   add_missing_rules(rules, to_add, default_action);
+  return 0;
 }

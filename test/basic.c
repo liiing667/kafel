@@ -141,17 +141,78 @@ TEST_CASE(arch_guard_multi_arch_compile) {
   free(prog.filter);
   kafel_ctxt_destroy(&ctxt);
 }
+
+TEST_CASE(multi_arch_same_action_duplicate) {
+  const char* policy =
+      "DEFAULT KILL\n"
+      "ALLOW { exit ON { arm, x86_64 } }\n"
+      "ALLOW { exit ON x86_64 }\n";
+  kafel_ctxt_t ctxt = kafel_ctxt_create();
+  kafel_set_input_string(ctxt, policy);
+  kafel_set_target_archs(ctxt,
+                         KAFEL_TARGET_ARCH_ARM | KAFEL_TARGET_ARCH_X86_64);
+  struct sock_fprog prog;
+  int rv = kafel_compile(ctxt, &prog);
+  if (rv != 0) {
+    test_fail_with_message("Duplicate same-action rule failed: %s",
+                           kafel_error_msg(ctxt));
+    test_failed(__LINE__, __FILE__);
+    kafel_ctxt_destroy(&ctxt);
+    return;
+  }
+  free(prog.filter);
+  kafel_ctxt_destroy(&ctxt);
+}
+
+TEST_CASE(multi_arch_conflict) {
+  const char* policy =
+      "DEFAULT KILL\n"
+      "ALLOW { exit ON x86_64 }\n"
+      "DENY { exit ON x86_64 }\n";
+  kafel_ctxt_t ctxt = kafel_ctxt_create();
+  kafel_set_input_string(ctxt, policy);
+  kafel_set_target_archs(ctxt,
+                         KAFEL_TARGET_ARCH_ARM | KAFEL_TARGET_ARCH_X86_64);
+  struct sock_fprog prog;
+  int rv = kafel_compile(ctxt, &prog);
+  if (rv == 0) {
+    free(prog.filter);
+    test_fail_with_message("Conflicting multi-arch policy compiled");
+    test_failed(__LINE__, __FILE__);
+  }
+  kafel_ctxt_destroy(&ctxt);
+}
+
+TEST_CASE(multi_arch_conflict_isolated_by_arch_guard) {
+  /* Different architectures do not share a syscall decision space. */
+  const char* policy =
+      "DEFAULT KILL\n"
+      "ALLOW { exit ON arm }\n"
+      "DENY { exit ON x86_64 }\n";
+  kafel_ctxt_t ctxt = kafel_ctxt_create();
+  kafel_set_input_string(ctxt, policy);
+  kafel_set_target_archs(ctxt,
+                         KAFEL_TARGET_ARCH_ARM | KAFEL_TARGET_ARCH_X86_64);
+  struct sock_fprog prog;
+  int rv = kafel_compile(ctxt, &prog);
+  if (rv != 0) {
+    test_fail_with_message("Arch-isolated rules failed: %s",
+                           kafel_error_msg(ctxt));
+    test_failed(__LINE__, __FILE__);
+    kafel_ctxt_destroy(&ctxt);
+    return;
+  }
+  free(prog.filter);
+  kafel_ctxt_destroy(&ctxt);
+}
 #endif
 
-TEST_CASE(rules_order) {
-  TEST_POLICY(
-      "POLICY a {\n"
-      "  ALLOW { exit, read },\n"
-      "  DENY { read, write }\n"
-      "} USE a DEFAULT KILL");
-  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, STDIN_FILENO, 0, 0),
-                             SYSCALL_EXECUTED_SPEC(0, 0));
-  TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC3(__NR_write, STDIN_FILENO, 0, 0));
+TEST_CASE(rules_order_override) {
+  /*
+   * First-match semantics are kept for conditional rule chains: the earlier
+   * ALLOW wins when its expression matches, the later ERRNO rule still
+   * decides the remaining invocations.  No rule is unreachable.
+   */
   TEST_POLICY(
       "POLICY a {\n"
       "  ALLOW { exit, read { fd == 0 && count == 0 } },\n"
@@ -162,6 +223,99 @@ TEST_CASE(rules_order) {
   TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 5, 0, 0),
                              SYSCALL_ERRNO_SPEC(1));
   TEST_POLICY_BLOCKS_SYSCALL(SYSCALL_SPEC3(__NR_read, 5, 0, 1));
+}
+
+TEST_CASE(rules_order_conflict) {
+  /*
+   * An unconditional ALLOW followed by an unconditional DENY for the same
+   * syscall leaves the DENY permanently unreachable.  Compilation must fail
+   * closed instead of silently picking the first action.
+   */
+  TEST_COMPILE_ERROR(
+      "POLICY a {\n"
+      "  ALLOW { exit, read },\n"
+      "  DENY { read, write }\n"
+      "} USE a DEFAULT KILL");
+  /* The reverse order hides the ALLOW and must fail as well. */
+  TEST_COMPILE_ERROR(
+      "POLICY a {\n"
+      "  DENY { read },\n"
+      "  ALLOW { read }\n"
+      "} USE a DEFAULT KILL");
+}
+
+TEST_CASE(duplicate_unconditional_same_action) {
+  /* Redundant rules with the same decision are normalized away. */
+  TEST_POLICY(
+      "POLICY a {\n"
+      "  ALLOW { exit, read },\n"
+      "  ALLOW { read }\n"
+      "} USE a DEFAULT KILL");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, STDIN_FILENO, 0, 0),
+                             SYSCALL_EXECUTED_SPEC(0, 0));
+}
+
+TEST_CASE(duplicate_catch_all_same_action) {
+  /* A catch-all conditional followed by the same decision is redundant. */
+  TEST_POLICY(
+      "POLICY a {\n"
+      "  ALLOW { exit },\n"
+      "  ERRNO(1) { read { fd == 0 } },\n"
+      "  ERRNO(2) { read },\n"
+      "  ERRNO(2) { read }\n"
+      "} USE a DEFAULT KILL");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 0, 0, 0),
+                             SYSCALL_ERRNO_SPEC(1));
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, STDERR_FILENO, 0, 0),
+                             SYSCALL_ERRNO_SPEC(2));
+}
+
+TEST_CASE(duplicate_catch_all_conflict) {
+  /* The final ALLOW can never trigger: the earlier catch-all decides all. */
+  TEST_COMPILE_ERROR(
+      "POLICY a {\n"
+      "  ERRNO(1) { read { fd == 0 } },\n"
+      "  ERRNO(2) { read },\n"
+      "  ALLOW { read }\n"
+      "} USE a DEFAULT KILL");
+}
+
+TEST_CASE(use_policy_conflict) {
+  /* Conflicts introduced through USE composition fail closed as well. */
+  TEST_COMPILE_ERROR(
+      "POLICY base {\n"
+      "  ALLOW { read }\n"
+      "}\n"
+      "POLICY top {\n"
+      "  USE base,\n"
+      "  DENY { read }\n"
+      "} USE top DEFAULT KILL");
+  TEST_COMPILE_ERROR(
+      "POLICY base {\n"
+      "  DENY { read }\n"
+      "}\n"
+      "POLICY top {\n"
+      "  ALLOW { read },\n"
+      "  USE base\n"
+      "} USE top DEFAULT KILL");
+}
+
+TEST_CASE(use_policy_override) {
+  /* Conditional composition stays a complete, explainable rule chain. */
+  TEST_POLICY(
+      "POLICY base {\n"
+      "  ALLOW { exit },\n"
+      "  ERRNO(1) { read { fd == 0 } }\n"
+      "}\n"
+      "POLICY top {\n"
+      "  USE base,\n"
+      "  ALLOW { read }\n"
+      "} USE top DEFAULT KILL");
+  TEST_POLICY_ALLOWS_SYSCALL(SYSCALL_SPEC3(__NR_read, 0, 0, 0),
+                             SYSCALL_ERRNO_SPEC(1));
+  TEST_POLICY_ALLOWS_SYSCALL(
+      SYSCALL_SPEC3(__NR_read, STDERR_FILENO, 0, 0),
+      ((syscall_result_spec_t){SECCOMP_RET_ALLOW, -1, EBADF}));
 }
 
 TEST_CASE(bitwise_operations) {

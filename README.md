@@ -102,6 +102,31 @@ with commas.
 
 Target of first rule matched is the policy decision.
 
+#### Rule combination and conflicts
+
+Policies combined with `USE` statements and repeated rules for the same
+syscall are normalized into a single ordered set of effective rules before
+any BPF code is emitted. The normalization rules are:
+
+ * Rules guarded by a matching boolean expression form an ordered
+   first-match chain; the first expression that matches decides the action.
+ * A rule without an expression (or after no earlier expression matched)
+   closes the chain and acts as the catch-all decision for that syscall.
+ * Redundant rules that can never change a decision are removed, e.g.
+   two identical unconditional rules or a rule whose only possible action is
+   already guaranteed by an earlier unconditional rule.
+
+A rule whose decision can never take effect because an earlier rule always
+matches with a *different* action is a conflict. Conflicting policies fail
+closed: compilation aborts with an error pointing at the unreachable rule
+instead of silently keeping source-order-dependent behavior. For example
+`ALLOW { read }` followed by `DENY { read }` is rejected, while
+`ALLOW { read { fd == 0 } }` followed by `ERRNO(1) { read }` stays valid
+because both rules remain reachable.
+
+Conflict detection is performed independently for every target
+architecture, so rules guarded by disjoint `ON` architectures never conflict.
+
 Following table list Kafel targets and their corresponding seccomp-filter
 return values.
 

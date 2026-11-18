@@ -693,20 +693,25 @@ static void reverse_instruction_buffer(struct codegen_ctxt *ctxt) {
 
 static int compile_policy_for_archs(struct codegen_ctxt *ctxt,
                                    struct kafel_ctxt *kafel_ctxt,
-                                   uint32_t target_archs) {
+                                   uint32_t target_archs, int *policy_loc) {
   ASSERT(ctxt != NULL);
   ASSERT(kafel_ctxt != NULL);
 
   struct syscall_range_rules *rules = range_rules_create();
+  const struct syscall_list *syscall_list = NULL;
   while (target_archs) {
     uint32_t target_arch = target_archs & ~(target_archs-1);
     target_archs &= ~(target_arch);
-    const struct syscall_list *syscall_list = syscalls_lookup(target_arch);
+    syscall_list = syscalls_lookup(target_arch);
     ASSERT(syscall_list != NULL);
     mark_all_policies_unused(kafel_ctxt);
     add_policy_rules(rules, kafel_ctxt->main_policy, syscall_list);
   }
-  normalize_rules(rules, kafel_ctxt->default_action);
+  if (normalize_rules(rules, kafel_ctxt->default_action, kafel_ctxt,
+                      syscall_list)) {
+    range_rules_destroy(&rules);
+    return -1;
+  }
   int begin = CURRENT_LOC;
   int next = generate_rules(ctxt, rules);
   range_rules_destroy(&rules);
@@ -715,7 +720,8 @@ static int compile_policy_for_archs(struct codegen_ctxt *ctxt,
   } else {
     next = -kafel_ctxt->default_action;
   }
-  return next;
+  *policy_loc = next;
+  return 0;
 }
 
 static int compile_policy_impl(struct codegen_ctxt *ctxt,
@@ -771,7 +777,11 @@ static int compile_policy_impl(struct codegen_ctxt *ctxt,
      * in seccomp_data must be swapped.
      */
     ctxt->is_big_endian = (archs[i].audit_arch & 0x40000000) == 0;
-    int policy = compile_policy_for_archs(ctxt, kafel_ctxt, archs[i].target_archs);
+    int policy = INVALID_LOCATION;
+    if (compile_policy_for_archs(ctxt, kafel_ctxt, archs[i].target_archs,
+                                 &policy)) {
+      return -1;
+    }
     if (policy != -ACTION_KILL) {
       next = add_jump(ctxt, BPF_JEQ, archs[i].audit_arch, policy, next);
     }

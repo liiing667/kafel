@@ -51,6 +51,7 @@ struct syscall_filter {
   struct syscall_spec* syscall;
   struct expr_tree* expr;
   uint32_t arch_mask;
+  struct kafel_source_location loc;
   TAILQ_ENTRY(syscall_filter) filters;
 };
 
@@ -115,7 +116,8 @@ void syscall_spec_destroy(struct syscall_spec** spec);
 
 struct syscall_filter* syscall_filter_create(struct syscall_spec* syscall,
                                              struct expr_tree* expr,
-                                             uint32_t arch_mask);
+                                             uint32_t arch_mask,
+                                             const struct kafel_source_location* loc);
 void syscall_filter_destroy(struct syscall_filter** filter);
 void syscall_filters_destroy(struct filterslist* filters);
 

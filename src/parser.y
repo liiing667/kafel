@@ -302,11 +302,11 @@ syscall_filters
 
 syscall_filter
     : syscall arch_guard_opt
-        { $$ = syscall_filter_create($1, NULL, $2); }
+        { $$ = syscall_filter_create($1, NULL, $2, &@1); }
     | syscall arch_guard_opt '{' '}'
-        { $$ = syscall_filter_create($1, NULL, $2); }
+        { $$ = syscall_filter_create($1, NULL, $2, &@1); }
     | syscall arch_guard_opt '{' bool_expr '}'
-        { $$ = syscall_filter_create($1, $4, $2); }
+        { $$ = syscall_filter_create($1, $4, $2, &@1); }
     ;
 
 arch_guard_opt
