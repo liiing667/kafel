@@ -25,5 +25,4 @@ all: src
 
 test:
 	${MAKE} -C test PROJECT_ROOT=../${PROJECT_ROOT}
-	( cd test && ./tests )
 # DO NOT DELETE

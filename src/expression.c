@@ -207,6 +207,7 @@ struct expr_tree *expr_copy(const struct expr_tree *expr) {
 
   struct expr_tree *rv = calloc(1, sizeof(*rv));
   rv->type = expr->type;
+  rv->depth = expr->depth;
   if (expr->type >= EXPR_BINARY_MIN && expr->type <= EXPR_BINARY_MAX) {
     rv->left = expr_copy(expr->left);
     rv->right = expr_copy(expr->right);

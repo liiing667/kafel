@@ -91,6 +91,8 @@ enum {
   ((syscall_exec_spec_t){true, SYSCALL_SPEC0(0), SYSCALL_EXECUTED_SPEC(0, 0)})
 
 int test_policy(bool should_fail, const char* source);
+int test_policy_target_archs(bool should_fail, uint32_t target_archs,
+                             const char* source);
 int test_policy_enforcment(test_func_t test_func, void* data, bool should_kill);
 int test_set_syscalls_mode(int mode);
 int test_policy_enforcment_syscalls(syscall_exec_spec_t syscall_specs[]);
@@ -130,6 +132,8 @@ extern void test_failed(int, const char*);
   } while (0)
 
 #define TEST_POLICY(...) CHECK_TEST_RET((test_policy(false, __VA_ARGS__)))
+#define TEST_POLICY_ARCHS(...) \
+  CHECK_TEST_RET((test_policy_target_archs(false, __VA_ARGS__)))
 #define TEST_COMPILE_ERROR(...) CHECK_TEST_RET((test_policy(true, __VA_ARGS__)))
 #define TEST_POLICY_ENFORCMENT(...) \
   CHECK_TEST_RET((test_policy_enforcment(__VA_ARGS__)))

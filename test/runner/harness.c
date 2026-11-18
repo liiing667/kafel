@@ -56,13 +56,23 @@ static bool test_policy_compilation_flag;
 static int test_syscalls_mode =
     KAFEL_TEST_SYSCALLS_EXECUTE | KAFEL_TEST_SYSCALLS_INTERPRET;
 
-int test_policy(bool should_fail, const char* source) {
+int test_set_syscalls_mode(int mode) {
+  int previous_mode = test_syscalls_mode;
+  test_syscalls_mode = mode;
+  return previous_mode;
+}
+
+static int test_policy_impl(bool should_fail, uint32_t target_archs,
+                            const char* source) {
   free(test_policy_prog.filter);
   test_policy_prog.filter = NULL;
   test_policy_prog.len = 0;
   kafel_ctxt_t ctxt = kafel_ctxt_create();
   kafel_set_input_string(ctxt, source);
   kafel_add_include_search_path(ctxt, "testdata");
+  if (target_archs != 0) {
+    kafel_set_target_archs(ctxt, target_archs);
+  }
   int rv = kafel_compile(ctxt, &test_policy_prog);
   if (rv != 0) {
     test_policy_compilation_flag = false;
@@ -80,6 +90,15 @@ int test_policy(bool should_fail, const char* source) {
   } else {
     TEST_FAIL("Policy compiled succesfuly when compilation error expected");
   }
+}
+
+int test_policy(bool should_fail, const char* source) {
+  return test_policy_impl(should_fail, 0, source);
+}
+
+int test_policy_target_archs(bool should_fail, uint32_t target_archs,
+                             const char* source) {
+  return test_policy_impl(should_fail, target_archs, source);
 }
 
 static void sys_exit(int rv) { syscall(__NR_exit, rv); }

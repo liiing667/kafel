@@ -17,12 +17,28 @@
 #   limitations under the License.
 #
 
-SRCS:=basic.c broken.c includes.c
+# Allow "make -C test" to work standalone, without PROJECT_ROOT set.
+PROJECT_ROOT?=../
+
+SRCS:=basic.c broken.c includes.c endianness.c depth.c samples_compile.c
 TARGET:=tests
 LIBS:=runner/librunner.a ${PROJECT_ROOT}libkafel.a
 SUBDIRS:=runner
 
 include ${PROJECT_ROOT}build/Makefile.mk
+
+# Build and run the fixtures by default.
+all: run
+
+.PHONY: run
+run: ${TARGET}
+	./${TARGET}
+
+${PROJECT_ROOT}libkafel.a: force
+	${MAKE} -C ${PROJECT_ROOT}src PROJECT_ROOT=${PROJECT_ROOT}
+
+.PHONY: force
+force:
 
 runner/librunner.a: runner
 ${TARGET}: ${OBJECTS} ${LIBS}
@@ -33,3 +49,6 @@ ${TARGET}: ${OBJECTS} ${LIBS}
 basic.o: runner/harness.h runner/runner.h
 broken.o: runner/harness.h runner/runner.h
 includes.o: runner/harness.h runner/runner.h
+endianness.o: runner/harness.h runner/runner.h
+depth.o: runner/harness.h runner/runner.h
+samples_compile.o: runner/harness.h runner/runner.h
